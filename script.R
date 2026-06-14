@@ -8,7 +8,7 @@ library(tidyverse)
 library(janitor)
 library(DT)
 
-DATA_DIR <- "C:/Users/lisaw/Downloads/MARION/data"
+DATA_DIR <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data"
 communes_cibles <- c("30059", #Le Cailar
                      "30341", #Vauvert
                      "30258", #Saint Gilles
@@ -30,12 +30,8 @@ communes_cibles <- c("30059", #Le Cailar
                      # "30033", #Beauvoisin
 ) 
 
-nuances_gauche_2026 <- c("LEXG", "LUG", "LECO",
-                         "LCOM", "LFI", "LSOC", "LDVG", "LVEC")
-nuances_gauche_2020 <- c("LEXG", "LRDG","LUG", "LECO",
-                         "LCOM", "LFI", "LSOC", "LDVG", "LVEC")
-
-
+nuances_gauche_2026 <- c("LEXG", "LUG", "LECO", "LCOM", "LFI", "LSOC", "LDVG", "LVEC")
+nuances_gauche_2020 <- c("LEXG", "LRDG","LUG", "LECO", "LCOM", "LFI", "LSOC", "LDVG", "LVEC")
 nuances_gauche_2024 <- c("EXG", "UG", "ECO", #dans la base
                          "COM", "FI", "SOC", "RDG", "DVG", "VEC") # pas dans la base
 nuances_gauche_2017 <- c("EXG", "COM", "FI", "SOC", "ECO", "DVG", # dans la base
@@ -70,7 +66,6 @@ pivot_election <- function(df, n_cols_fixes, vars_candidat) {
     ) %>%
     filter(!is.na(nb_voix) & nb_voix != "")
 }
-
 
 # RÉFÉRENTIEL COMMUNES ----
 selection_communes <- read_csv(path("v_commune_2025.csv")) %>%
@@ -131,10 +126,7 @@ precarite_filosofi <- read_delim(
   
 observatoire_territoire_raw <- read_excel(
   path("observatoire_territoires.xlsx"),
-  skip = 3
-) %>% 
-  filter(`Code` %in% communes_cibles)
-
+  skip = 3) %>% filter(`Code` %in% communes_cibles)
 
 ## --- Élections ----
 election_municipale_2026_raw <- read_delim(
@@ -161,7 +153,6 @@ installation <- read_delim(
   filter(`insee` %in% communes_cibles) %>% 
   select(com = insee, nom_installation = nom, type_installation = install_particuliere)
 
-
 ## --- Associations ----
 associations <- bind_rows(
   read_delim(path("association/rna_import_20260601_dpt_30.csv"), delim = ";", trim_ws = TRUE),
@@ -177,14 +168,19 @@ associations <- bind_rows(
 asso_corrida_course_raw <- bind_rows(
   read_csv(path("association/Les Associations de l'Union des Clubs Taurins de France/CORRIDA.csv"))          %>% mutate(Type = "corrida"),
   read_csv(path("association/Les Associations de l'Union des Clubs Taurins de France/COURSE CAMARGUAISE.csv")) %>% mutate(Type = "course_camarguaise"),
-  read_csv(path("association/Les Associations de l'Union des Clubs Taurins de France/COURSE LANDAISE.csv"))    %>% mutate(Type = "course_landaise")
-)
+  read_csv(path("association/Les Associations de l'Union des Clubs Taurins de France/COURSE LANDAISE.csv"))    %>% mutate(Type = "course_landaise"))
 
-  
 culture_taurine <- read_excel(
   path("culture_taurine.xlsx")) %>% 
   right_join(selection_communes, by = c("Commune" = "libelle")) %>% 
   select(-Commune)
+
+parc_naturel_regional <- read_excel(
+  path("parc_naturels_regionaux.xlsx"),
+  skip = 3) %>% 
+  filter(`Code` %in% communes_cibles) %>% 
+  select(com = Code,
+         pnr = "PNR - Parcs naturels régionaux")
 
 
 # TRANSFORMATIONS----
@@ -605,8 +601,8 @@ asso_corrida_course <- asso_corrida_course_raw %>%
   summarise(n = n(), .groups = "drop") %>%
   pivot_wider(names_from = type, values_from = n, values_fill = 0) %>% 
   select(-`NA`) %>% 
-  rename(nb_asso_corrida = corrida,
-         nb_asso_course_camarguaise = course_camarguaise)
+  rename(asso_corrida = corrida,
+         asso_course_camarguaise = course_camarguaise)
 
 
 # BASE COMPLÈTE----
@@ -630,13 +626,76 @@ final <-  insee_recensement %>%
   left_join(asso_taurines, by = "com") %>%
   left_join(asso_corrida_course, by = "com") %>% 
   left_join(culture_taurine, by = "com") %>%
+  left_join(parc_naturel_regional, by = "com") %>% 
+  mutate(
+    nb_asso_taurines_p1000        = (nb_asso_taurines_rna      / pop_22) * 1000,
+    nb_asso_corrida_p1000         = (asso_corrida            / pop_22) * 1000,
+    nb_asso_course_cam_p1000      = (asso_course_camarguaise / pop_22) * 1000,
+    nb_j_fetes_votives_p1000      = (nb_j_fetes_votives_an      / pop_22) * 1000,
+    nb_j_abrivados_p1000          = (nb_abrivados_bandidos_an   / pop_22) * 1000,
+    nb_j_courses_arenes_p1000     = (nb_j_courses_arenes_an     / pop_22) * 1000,
+    nb_manade_p1000               = (nb_manade                  / pop_22) * 1000,
+  ) %>% 
   relocate(libelle, com) 
 
 
-datatable(final, 
+normalize <- function(x) {
+  if (max(x, na.rm = TRUE) == min(x, na.rm = TRUE)) return(rep(0, length(x)))
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+
+final_IAPC <- final %>%
+  mutate(
+    # Normalisation + IAPC v1
+    across(
+      c(nb_asso_taurines_p1000,
+        arene, nb_j_courses_arenes_p1000, nb_j_abrivados_p1000, nb_j_fetes_votives_p1000,
+        nb_manade_p1000, manade_profil_agro, manade_profil_sport_culture,
+        tx_enracinement_22),
+      list(norm = normalize)
+    ),
+    dim_institutionnel = nb_asso_taurines_p1000_norm,
+    dim_pratique       = 0.4  * arene_norm +
+      0.3  * nb_j_abrivados_p1000_norm +
+      0.2  * nb_j_courses_arenes_p1000_norm +
+      0.1  * nb_j_fetes_votives_p1000_norm,
+    dim_patrimonial    = 0.4  * nb_manade_p1000_norm +
+      0.25 * manade_profil_agro_norm +
+      0.25 * manade_profil_sport_culture_norm +
+      0.1  * tx_enracinement_22_norm,
+    IAPC               = (dim_institutionnel + dim_pratique + dim_patrimonial) / 3
+  ) %>%
+  mutate(
+    # Normalisation + IAPC v2
+    across(
+      c(nb_manade_p1000,
+        nb_asso_taurines_p1000, nb_asso_corrida_p1000, nb_asso_course_cam_p1000,
+        nb_j_abrivados_p1000, nb_j_courses_arenes_p1000, nb_j_fetes_votives_p1000,
+        arene, manade_profil_agro, manade_profil_sport_culture, tx_enracinement_22),
+      list(norm = normalize)
+    ),
+    dim_productive     = nb_manade_p1000_norm,
+    dim_associative    = 0.8 * nb_asso_taurines_p1000_norm +
+      0.1 * nb_asso_corrida_p1000_norm +
+      0.1 * nb_asso_course_cam_p1000_norm,
+    dim_evenementielle = 0.45 * nb_j_abrivados_p1000_norm +
+      0.4 * nb_j_courses_arenes_p1000_norm +
+      0.15 * nb_j_fetes_votives_p1000_norm,
+    dim_patrimoniale   = 0.4 * arene_norm +
+      0.25 * manade_profil_agro_norm +
+      0.25 * manade_profil_sport_culture_norm +
+      0.1 * tx_enracinement_22_norm,
+    IAPC_v2            = (dim_productive + dim_associative + dim_evenementielle + dim_patrimoniale) / 4
+  ) %>%
+  select(-ends_with("_norm"),
+         -dim_institutionnel, -dim_pratique, -dim_patrimonial,
+         -dim_productive, -dim_associative, -dim_evenementielle, -dim_patrimoniale)
+
+datatable(final_IAPC, 
           options = list(
             scrollX = TRUE,
             fixedColumns = list(leftColumns = 2)
           ),
           extensions = "FixedColumns") %>%
-  formatRound(columns = names(final)[sapply(final, is.numeric)], digits = 2)
+  formatRound(columns = names(final_IAPC)[sapply(final_IAPC, is.numeric)], digits = 2)
