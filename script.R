@@ -7,8 +7,14 @@ library(readxl)
 library(tidyverse)
 library(janitor)
 library(DT)
+library(ggplot2)
+library(sf)
+library(writexl)
 
-DATA_DIR <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data"
+DATA_DIR <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data/raw"
+DATA_DIR_processed <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data/processed"
+OUTPUT <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/output"
+
 communes_cibles <- c("30059", #Le Cailar
                      "30341", #Vauvert
                      "30258", #Saint Gilles
@@ -76,8 +82,10 @@ selection_communes <- read_csv(path("v_commune_2025.csv")) %>%
   filter(COM %in% communes_cibles) %>% clean_names()
 
 # CHARGEMENT DES DONNÉES BRUTES----
+## Fond de carte ----
+fond_carte <- st_read(path("fond_carte/communes-20220101.shp"))
 
-## --- Recensement INSEE 2022 ----
+## Recensement INSEE 2022 ----
 insee_recensement_raw <- list(
   read_delim(path("insee_recensement/base-cc-coupl-fam-men-2022.CSV"),          delim = ";", trim_ws = TRUE),
   read_delim(path("insee_recensement/base-cc-evol-struct-pop-2022.CSV"),        delim = ";", trim_ws = TRUE),
@@ -96,7 +104,7 @@ insee_recensement_raw <- list(
   left_join(selection_communes, by = c("CODGEO" = "com")) %>%
   select(com = CODGEO, libelle, SUPERF, starts_with("P22_"), starts_with("C22_"))
 
-## --- Pauvreté ----
+## Pauvreté ----
 precarite <- read_excel(path("precarite/20260306-indicateurs-precarite.xlsx")) %>%
   mutate(across(-c(ID, `Niveau géographique`, NOM), as.numeric)) %>% 
   filter(`ID` %in% communes_cibles) %>% 
@@ -128,7 +136,7 @@ observatoire_territoire_raw <- read_excel(
   path("observatoire_territoires.xlsx"),
   skip = 3) %>% filter(`Code` %in% communes_cibles)
 
-## --- Élections ----
+## Élections ----
 election_municipale_2026_raw <- read_delim(
   path("resultat_election/election_municipale_2026_T1.csv"),
   delim = ";", trim_ws = TRUE
@@ -145,7 +153,7 @@ election_municipale_2020_raw <- read_excel(
 election_legislative_2017_raw <- read_excel(path("resultat_election/election_legislative_2017_T1.xlsx"), skip = 3)
 election_presidentielle_2002_raw  <- read_excel(path("resultat_election/election_presidentielle_2002_T1.xls"))
 
-## --- Équipements sportifs ----
+## Équipements sportifs ----
 installation <- read_delim(
   path("data-es-installation.csv"),
   delim = ";", trim_ws = TRUE
@@ -153,7 +161,7 @@ installation <- read_delim(
   filter(`insee` %in% communes_cibles) %>% 
   select(com = insee, nom_installation = nom, type_installation = install_particuliere)
 
-## --- Associations ----
+## Associations ----
 associations <- bind_rows(
   read_delim(path("association/rna_import_20260601_dpt_30.csv"), delim = ";", trim_ws = TRUE),
   read_delim(path("association/rna_import_20260601_dpt_13.csv"), delim = ";", trim_ws = TRUE)
@@ -494,18 +502,26 @@ election_municipale_2026<- election_municipale_2026_raw %>%
   )) %>%
   group_by(com) %>%
   summarise(
-    pct_rn_26 = ifelse(
-      any(nuance_candidat == "LRN"),
-      mean(percent_voix_exprimees[nuance_candidat == "LRN"], na.rm = TRUE),
-      NA_real_
-    ),    pct_gauche_26 = ifelse(
-      any(nuance_candidat %in% nuances_gauche_2026),
-      sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2026], na.rm = TRUE),
-      NA_real_
-    ),
-    pct_abstention_26 = first(percent_abstentions),
+    candidat_rn_26     = as.integer(any(nuance_candidat == "LRN")),
+    candidat_gauche_26 = if (all(is.na(nuance_candidat))) NA_integer_ else
+      as.integer(any(nuance_candidat %in% nuances_gauche_2026, na.rm = TRUE)),
+    candidat_se_26 = as.integer(any(nuance_candidat == "LDIV")),
+    pct_abstention_26     = first(percent_abstentions),
     .groups = "drop"
   )
+  # summarise(
+  #   pct_rn_26 = ifelse(
+  #     any(nuance_candidat == "LRN"),
+  #     mean(percent_voix_exprimees[nuance_candidat == "LRN"], na.rm = TRUE),
+  #     NA_real_
+  #   ),    pct_gauche_26 = ifelse(
+  #     any(nuance_candidat %in% nuances_gauche_2026),
+  #     sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2026], na.rm = TRUE),
+  #     NA_real_
+  #   ),
+  #   pct_abstention_26 = first(percent_abstentions),
+  #   .groups = "drop"
+  # )
 
 ### --- Municipales 2020 ----
 election_municipale_2020 <- election_municipale_2020_raw %>%
@@ -528,18 +544,28 @@ election_municipale_2020 <- election_municipale_2020_raw %>%
   )) %>%
   group_by(com) %>%
   summarise(
-    pct_rn_20 = ifelse(
-      any(nuance_candidat == "LRN"),
-      mean(percent_voix_exprimees[nuance_candidat == "LRN"], na.rm = TRUE),
-      NA_real_
-    ),    pct_gauche_20 = ifelse(
-      any(nuance_candidat %in% nuances_gauche_2020),
-      sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2020], na.rm = TRUE),
-      NA_real_
-    ),
-    pct_abstention_20 = first(percent_abs_ins),
+    candidat_rn_20 = if (all(is.na(nuance_candidat) | nuance_candidat == "LNC")) NA_integer_ else
+      as.integer(any(nuance_candidat == "LRN")),
+    candidat_gauche_20 = if (all(is.na(nuance_candidat) | nuance_candidat == "LNC")) NA_integer_ else
+      as.integer(any(nuance_candidat %in% nuances_gauche_2020)),
+    candidat_se_20 = if (all(is.na(nuance_candidat) | nuance_candidat == "LNC")) NA_integer_ else
+      as.integer(any(nuance_candidat == "LDIV")),
+    pct_abstention_20     = first(percent_abs_ins),
     .groups = "drop"
   )
+  # summarise(
+  #   pct_rn_20 = ifelse(
+  #     any(nuance_candidat == "LRN"),
+  #     mean(percent_voix_exprimees[nuance_candidat == "LRN"], na.rm = TRUE),
+  #     NA_real_
+  #   ),    pct_gauche_20 = ifelse(
+  #     any(nuance_candidat %in% nuances_gauche_2020),
+  #     sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2020], na.rm = TRUE),
+  #     NA_real_
+  #   ),
+  #   pct_abstention_20 = first(percent_abs_ins),
+  #   .groups = "drop"
+  # )
 
 ## ASSOCIATIONS ----
 densite_associative <- associations %>%
@@ -645,7 +671,7 @@ normalize <- function(x) {
 }
 
 
-final_IAPC <- final %>%
+final_IAPC_IARN <- final %>%
   mutate(
     # Normalisation + IAPC v1
     across(
@@ -687,15 +713,280 @@ final_IAPC <- final %>%
       0.25 * manade_profil_sport_culture_norm +
       0.1 * tx_enracinement_22_norm,
     IAPC_v2            = (dim_productive + dim_associative + dim_evenementielle + dim_patrimoniale) / 4
+  ) %>%  mutate(
+    # dim_constance
+    above_med_02 = as.integer(pct_rn_02 > median(pct_rn_02, na.rm = TRUE)),
+    above_med_17 = as.integer(pct_rn_17 > median(pct_rn_17, na.rm = TRUE)),
+    above_med_22 = as.integer(pct_rn_22 > median(pct_rn_22, na.rm = TRUE)),
+    above_med_24 = as.integer(pct_rn_24 > median(pct_rn_24, na.rm = TRUE)),
+    dim_constance = (above_med_02 + above_med_17 + above_med_22 + above_med_24) / 4,
+    
+    # dim_niveau
+    across(c(pct_rn_02, pct_rn_17, pct_rn_22, pct_rn_24), 
+           list(norm = normalize)),
+    dim_niveau = (pct_rn_02_norm + pct_rn_17_norm + 
+                    pct_rn_22_norm + pct_rn_24_norm) / 4,
+    
+    # dim_dynamique
+    # across(c(evol_rn_02_22, evol_rn_17_24), list(norm = normalize)),
+    # dim_dynamique = 0.65 * evol_rn_02_22_norm + 0.35 * evol_rn_17_24_norm,
+    
+    # IARN
+    IARN = 0.5 * dim_niveau + 0.5 * dim_constance 
+    # + 0.2 * dim_dynamique
   ) %>%
-  select(-ends_with("_norm"),
-         -dim_institutionnel, -dim_pratique, -dim_patrimonial,
-         -dim_productive, -dim_associative, -dim_evenementielle, -dim_patrimoniale)
+select(-ends_with("_norm"), -starts_with("above_med_"),
+       -dim_institutionnel, -dim_pratique, -dim_patrimonial,
+       -dim_productive, -dim_associative, -dim_evenementielle, -dim_patrimoniale)
 
-datatable(final_IAPC, 
+write_xlsx(final_IAPC_IARN,
+           path = file.path(DATA_DIR_processed, "final_IAPC_IARN.xlsx"))
+
+datatable(final_IAPC_IARN, 
           options = list(
             scrollX = TRUE,
             fixedColumns = list(leftColumns = 2)
           ),
           extensions = "FixedColumns") %>%
-  formatRound(columns = names(final_IAPC)[sapply(final_IAPC, is.numeric)], digits = 2)
+  formatRound(columns = names(final_IAPC_IARN)[sapply(final_IAPC_IARN, is.numeric)], digits = 2)
+
+# GRAPHIQUES ----
+# final_IAPC_IARN <- read_excel(file.path(DATA_DIR_processed, "final_IAPC_IARN.xlsx"))
+## Pression festive ----
+pression_festive <- final_IAPC_IARN %>%
+  arrange(desc(nb_j_abrivados_p1000)) %>%
+  mutate(libelle = fct_reorder(libelle, nb_j_abrivados_p1000))
+
+ggplot(pression_festive, aes(x = nb_j_abrivados_p1000, y = libelle)) +
+  geom_col(aes(fill = pct_rn_24), width = 0.7) +
+  geom_text(
+    aes(label = paste0(round(pct_rn_24, 1), "% RN")),
+    hjust = -0.1, size = 3, color = "grey30"
+  ) +
+  scale_fill_gradient(
+    low = "#f0f4ff", high = "#001E96",
+    name = "Score RN 2024 (%)"
+  ) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(
+    title = "Pression festive taurine et vote RN",
+    subtitle = "Classement des communes par jours d'abrivados/bandidos pour 1 000 hab.",
+    x = "Jours d'abrivados pour 1 000 hab.",
+    y = NULL,
+    caption = "Source : jours d'abrivados/bandidos pour 1 000 habitants (données communales) ; résultats des législatives 2024 (Ministère de l'Intérieur)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "grey40", size = 10),
+    legend.position = "bottom",
+    legend.key.width = unit(2, "cm"),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.y = element_text(size = 9),
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+  )
+
+ggsave(
+  filename = file.path(OUTPUT, "pression_festive_rn.png"),
+  width = 10,
+  height = 8,
+  dpi = 300
+)
+
+## Carte ----
+fond_carte_filtre <- fond_carte %>%
+  inner_join(final_IAPC_IARN, by = c("insee" = "com"))
+library(ggplot2)
+library(sf)
+library(dplyr)
+library(ggrepel)
+
+centroides <- fond_carte_filtre %>%
+  st_centroid()
+
+# Extraire les coordonnées pour ggrepel
+coords <- centroides %>%
+  mutate(
+    x = st_coordinates(.)[,1],
+    y = st_coordinates(.)[,2]
+  ) %>%
+  st_drop_geometry()
+
+ggplot() +
+  geom_sf(
+    data = fond_carte_filtre,
+    aes(fill = IAPC),
+    color = "white",
+    linewidth = 0.2
+  ) +
+  geom_sf(
+    data = centroides,
+    aes(size = pct_rn_24),
+    shape = 21,
+    fill = "white",      # fond blanc pour contraste
+    color = "black",
+    stroke = 0.8,
+    alpha = 0.75
+  ) +
+  geom_label_repel(
+    data = coords,
+    aes(x = x, y = y, label = libelle),
+    size = 2.8,
+    fontface = "bold",
+    color = "black",
+    fill = alpha("white", 0.75),
+    label.size = 0.2,
+    label.r = unit(0.15, "lines"),
+    box.padding = 0.4,
+    point.padding = 0.3,
+    segment.color = "grey40",
+    segment.size = 0.4,
+    segment.alpha = 0.8,
+    max.overlaps = Inf,   # force tous les labels
+    min.segment.length = 0
+  ) +
+  scale_fill_viridis_c(
+    option = "magma",
+    direction = -1,
+    name = "IAPC",
+    na.value = "grey80"
+  ) +
+  scale_size_continuous(
+    name = "% vote RN 2024",
+    range = c(2, 12),          # plage élargie pour mieux différencier
+    breaks = c(10, 25, 40, 55),
+    labels = c("10 %", "25 %", "40 %", "55 %")
+  ) +
+  guides(
+    size = guide_legend(
+      override.aes = list(fill = "white", color = "black", stroke = 0.8),
+      title.position = "top"
+    ),
+    fill = guide_colorbar(title.position = "top", barwidth = 1, barheight = 8)
+  ) +
+  labs(
+    title = "IAPC et vote RN au premier tour 2024",
+    subtitle = "Couleur = intensité de la pratique taurine (IAPC) | Taille = % vote RN (législatives 2024)",
+    caption = "Sources : RNA, FFCC, ministère de l'Intérieur"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10, color = "grey40"),
+    legend.position = "right",
+    legend.box = "vertical",
+    legend.spacing.y = unit(0.5, "cm")
+  )
+
+
+
+## Nuage de points ----
+ggplot(final_IAPC_IARN, aes(x = IAPC, y = pct_rn_24)) +
+  geom_point(
+    shape = 21,
+    fill = "steelblue",
+    color = "white",
+    stroke = 0.6,
+    alpha = 0.75,
+    size = 3
+  ) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "firebrick",
+    linewidth = 0.8,
+    fill = "firebrick",
+    alpha = 0.1
+  ) +
+  geom_label_repel(
+    aes(label = libelle),
+    size = 2.8,
+    fontface = "bold",
+    color = "black",
+    fill = alpha("white", 0.75),
+    label.size = 0.2,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    segment.color = "grey40",
+    segment.size = 0.4,
+    max.overlaps = Inf,
+    min.segment.length = 0
+  ) +
+  labs(
+    title = "IAPC et vote RN au premier tour 2024",
+    subtitle = "Droite de régression linéaire",
+    x = "IAPC (intensité de la pratique taurine)",
+    y = "% vote RN — législatives 2024",
+    caption = "Sources : RNA, FFCC, ministère de l'Intérieur"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10, color = "grey40"),
+    panel.grid.minor = element_blank()
+  )
+
+
+
+## Nuage de points ----
+ggplot(final_IAPC_IARN, aes(x = IAPC_v2, y = pct_rn_24)) +
+  geom_point(
+    shape = 21,
+    fill = "steelblue",
+    color = "white",
+    stroke = 0.6,
+    alpha = 0.75,
+    size = 3
+  ) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE,
+    color = "firebrick",
+    linewidth = 0.8,
+    fill = "firebrick",
+    alpha = 0.1
+  ) +
+  geom_label_repel(
+    aes(label = libelle),
+    size = 2.8,
+    fontface = "bold",
+    color = "black",
+    fill = alpha("white", 0.75),
+    label.size = 0.2,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    segment.color = "grey40",
+    segment.size = 0.4,
+    max.overlaps = Inf,
+    min.segment.length = 0
+  ) +
+  labs(
+    title = "IAPC_v2 et vote RN au premier tour 2024",
+    subtitle = "Droite de régression linéaire",
+    x = "IAPC_v2 (intensité de la pratique taurine)",
+    y = "% vote RN — législatives 2024",
+    caption = "Sources : RNA, FFCC, ministère de l'Intérieur"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(size = 10, color = "grey40"),
+    panel.grid.minor = element_blank()
+  )
+
+cor.test(final_IAPC_IARN$IAPC_v2, final_IAPC_IARN$pct_rn_24)
+
+# IAPC → RN 2024
+# 
+# Corrélation = 0.32, p-value = 0.20 → non significative
+# On ne peut pas rejeter l'hypothèse d'absence de corrélation
+# 
+# IAPC_v2 → RN 2024
+# 
+# Corrélation = 0.43, p-value = 0.075 → limite de significativité (proche du seuil 0.05)
+# Tendance positive plus marquée, mais toujours pas significative au seuil classique
+# 
+# Le problème principal : df = 16, soit seulement 18 communes dans ta base. Avec si peu d'observations, la puissance statistique est très faible — une vraie corrélation peut passer inaperçue. L'intervalle de confiance très large (presque -0.18 à +0.68) le confirme.
+# En résumé : il y a une tendance positive entre pratique taurine et vote RN, mais tu ne peux pas la conclure statistiquement avec 18 points. C'est une limite à mentionner dans ton analyse.
