@@ -10,6 +10,12 @@ library(DT)
 library(ggplot2)
 library(sf)
 library(writexl)
+library(sf)
+library(ggrepel)
+library(biscale)
+library(cowplot)
+library(patchwork)
+
 
 DATA_DIR <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data/raw"
 DATA_DIR_processed <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data/processed"
@@ -46,6 +52,14 @@ candidats_gauche_2022 <- c("MÉLENCHON", "HIDALGO", "JADOT", "ROUSSEL", "POUTOU"
 
 candidats_gauche_2002 <- c("JOSPIN", "LAGUILLER", "CHEVENEMENT", "MAMERE", "BESANCENOT", "HUE", "TAUBIRA", "LEPAGE", "GLUCKSTEIN") # candidats gauche/NFP au T1
 
+annees <- c("02", "17", "22", "24")
+
+type_election <- c(
+  "02" = "présidentielles",
+  "17" = "législatives",
+  "22" = "présidentielles",
+  "24" = "législatives"
+)
 # FONCTIONS----
 path <- function(...) file.path(DATA_DIR, ...)
 
@@ -73,6 +87,11 @@ pivot_election <- function(df, n_cols_fixes, vars_candidat) {
     filter(!is.na(nb_voix) & nb_voix != "")
 }
 
+normalize <- function(x) {
+  if (max(x, na.rm = TRUE) == min(x, na.rm = TRUE)) return(rep(0, length(x)))
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
 # RÉFÉRENTIEL COMMUNES ----
 selection_communes <- read_csv(path("v_commune_2025.csv")) %>%
   select(COM, 
@@ -82,9 +101,6 @@ selection_communes <- read_csv(path("v_commune_2025.csv")) %>%
   filter(COM %in% communes_cibles) %>% clean_names()
 
 # CHARGEMENT DES DONNÉES BRUTES----
-## Fond de carte ----
-fond_carte <- st_read(path("fond_carte/communes-20220101.shp"))
-
 ## Recensement INSEE 2022 ----
 insee_recensement_raw <- list(
   read_delim(path("insee_recensement/base-cc-coupl-fam-men-2022.CSV"),          delim = ";", trim_ws = TRUE),
@@ -664,14 +680,7 @@ final <-  insee_recensement %>%
   ) %>% 
   relocate(libelle, com) 
 
-
-normalize <- function(x) {
-  if (max(x, na.rm = TRUE) == min(x, na.rm = TRUE)) return(rep(0, length(x)))
-  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
-}
-
-
-final_IAPC_IARN <- final %>%
+final_analyse <- final %>%
   mutate(
     # Normalisation + IAPC v1
     across(
@@ -739,254 +748,284 @@ select(-ends_with("_norm"), -starts_with("above_med_"),
        -dim_institutionnel, -dim_pratique, -dim_patrimonial,
        -dim_productive, -dim_associative, -dim_evenementielle, -dim_patrimoniale)
 
-write_xlsx(final_IAPC_IARN,
-           path = file.path(DATA_DIR_processed, "final_IAPC_IARN.xlsx"))
+write_xlsx(final_analyse,
+           path = file.path(DATA_DIR_processed, "final_analyse.xlsx"))
 
-datatable(final_IAPC_IARN, 
+datatable(final_analyse, 
           options = list(
             scrollX = TRUE,
             fixedColumns = list(leftColumns = 2)
           ),
           extensions = "FixedColumns") %>%
-  formatRound(columns = names(final_IAPC_IARN)[sapply(final_IAPC_IARN, is.numeric)], digits = 2)
+  formatRound(columns = names(final_analyse)[sapply(final_analyse, is.numeric)], digits = 2)
 
 # GRAPHIQUES ----
-# final_IAPC_IARN <- read_excel(file.path(DATA_DIR_processed, "final_IAPC_IARN.xlsx"))
-## Pression festive ----
-pression_festive <- final_IAPC_IARN %>%
-  arrange(desc(nb_j_abrivados_p1000)) %>%
-  mutate(libelle = fct_reorder(libelle, nb_j_abrivados_p1000))
+final_analyse <- read_excel(file.path(DATA_DIR_processed, "final_analyse.xlsx"))
+fond_carte <- st_read(path("fond_carte/communes-20220101.shp"))
 
-ggplot(pression_festive, aes(x = nb_j_abrivados_p1000, y = libelle)) +
-  geom_col(aes(fill = pct_rn_24), width = 0.7) +
-  geom_text(
-    aes(label = paste0(round(pct_rn_24, 1), "% RN")),
-    hjust = -0.1, size = 3, color = "grey30"
-  ) +
-  scale_fill_gradient(
-    low = "#f0f4ff", high = "#001E96",
-    name = "Score RN 2024 (%)"
-  ) +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.2))) +
-  labs(
-    title = "Pression festive taurine et vote RN",
-    subtitle = "Classement des communes par jours d'abrivados/bandidos pour 1 000 hab.",
-    x = "Jours d'abrivados pour 1 000 hab.",
-    y = NULL,
-    caption = "Source : jours d'abrivados/bandidos pour 1 000 habitants (données communales) ; résultats des législatives 2024 (Ministère de l'Intérieur)"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "grey40", size = 10),
-    legend.position = "bottom",
-    legend.key.width = unit(2, "cm"),
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank(),
-    axis.text.y = element_text(size = 9),
-    plot.background = element_rect(fill = "white", color = NA),
-    panel.background = element_rect(fill = "white", color = NA),
-  )
+## Fonctions globales ----
+make_map <- function(data_bi, coords, titre_version) {
+  ggplot() +
+    geom_sf(data = data_bi, aes(fill = bi_class),
+            color = "white", linewidth = 0.3, show.legend = FALSE) +
+    bi_scale_fill(pal = "DkCyan", dim = 2) +
+    geom_label_repel(
+      data = coords, aes(x = x, y = y, label = libelle),
+      size = 2.5, fontface = "bold",
+      fill = alpha("white", 0.85), color = "black",
+      label.size = 0.2, label.r = unit(0.15, "lines"),
+      box.padding = 0.5, point.padding = 0.3,
+      segment.color = "grey40", segment.size = 0.4,
+      max.overlaps = Inf, min.segment.length = 0
+    ) +
+    labs(title = titre_version) +
+    theme_void() +
+    theme(
+      plot.title  = element_text(face = "bold", size = 11, hjust = 0.5),
+      plot.margin = margin(5, 5, 5, 5)
+    )
+}
 
-ggsave(
-  filename = file.path(OUTPUT, "pression_festive_rn.png"),
-  width = 10,
-  height = 8,
-  dpi = 300
-)
+make_scatter <- function(data, x_var, y_var, x_label, y_label) {
+  ggplot(data, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    geom_point(
+      shape = 21, fill = "steelblue", color = "white",
+      stroke = 0.6, alpha = 0.75, size = 3
+    ) +
+    geom_smooth(
+      method = "lm", se = TRUE,
+      color = "firebrick", linewidth = 0.8,
+      fill = "firebrick", alpha = 0.1
+    ) +
+    geom_label_repel(
+      aes(label = libelle),
+      size = 2.8, fontface = "bold",
+      color = "black", fill = alpha("white", 0.75),
+      label.size = 0.2, box.padding = 0.4,
+      point.padding = 0.3, segment.color = "grey40",
+      segment.size = 0.4, max.overlaps = Inf,
+      min.segment.length = 0
+    ) +
+    labs(x = x_label, y = y_label) +
+    theme_minimal(base_size = 12) +
+    theme(panel.grid.minor = element_blank())
+}
 
-## Carte ----
-fond_carte_filtre <- fond_carte %>%
-  inner_join(final_IAPC_IARN, by = c("insee" = "com"))
-library(ggplot2)
-library(sf)
-library(dplyr)
-library(ggrepel)
+## Précalculs communs----
 
-centroides <- fond_carte_filtre %>%
-  st_centroid()
+carte_base <- fond_carte %>%
+  inner_join(final_analyse, by = c("insee" = "com"))
 
-# Extraire les coordonnées pour ggrepel
-coords <- centroides %>%
+coords <- carte_base %>%
+  st_centroid() %>%
   mutate(
-    x = st_coordinates(.)[,1],
-    y = st_coordinates(.)[,2]
+    x = st_coordinates(.)[, 1],
+    y = st_coordinates(.)[, 2]
   ) %>%
   st_drop_geometry()
 
-ggplot() +
-  geom_sf(
-    data = fond_carte_filtre,
-    aes(fill = IAPC),
-    color = "white",
-    linewidth = 0.2
+seuil_iapc1 <- round((min(carte_base$IAPC,    na.rm = TRUE) + max(carte_base$IAPC,    na.rm = TRUE)) / 2, 2)
+seuil_iapc2 <- round((min(carte_base$IAPC_v2, na.rm = TRUE) + max(carte_base$IAPC_v2, na.rm = TRUE)) / 2, 2)
+seuil_iarn  <- round((min(carte_base$IARN,    na.rm = TRUE) + max(carte_base$IARN,    na.rm = TRUE)) / 2, 2)
+
+## IAPC × vote RN----
+### Pression festive----
+
+walk(annees, function(an) {
+  col_rn         <- paste0("pct_rn_", an)
+  election       <- type_election[an]
+  annee_complete <- paste0("20", an)
+  
+  pression_festive <- final_analyse %>%
+    arrange(desc(nb_j_abrivados_p1000)) %>%
+    mutate(
+      libelle    = fct_reorder(libelle, nb_j_abrivados_p1000),
+      pct_rn_an  = .data[[col_rn]]
+    )
+  
+  p <- ggplot(pression_festive, aes(x = nb_j_abrivados_p1000, y = libelle)) +
+    geom_col(aes(fill = pct_rn_an), width = 0.7) +
+    geom_text(
+      aes(label = paste0(round(pct_rn_an, 1), "% RN")),
+      hjust = -0.1, size = 3, color = "grey30"
+    ) +
+    scale_fill_gradient(
+      low  = "#f0f4ff", high = "#001E96",
+      name = paste0("Score RN au premier tour des élections en ", annee_complete, " (%)")
+    ) +
+    scale_x_continuous(expand = expansion(mult = c(0, 0.2))) +
+    labs(
+      title    = paste0("Pression festive taurine et vote RN (élections ", election, " ", annee_complete, ")"),
+      subtitle = "Classement des communes par jours d'abrivados pour 1 000 hab.",
+      x        = "Jours d'abrivados pour 1 000 hab.",
+      y        = NULL,
+      caption  = paste0(
+        "Source : nombre de jours d'abrivados (FFCC) ; population (INSEE 2022) ; ",
+        "résultats des élections ", election, " ", annee_complete, " au 1er tour (Ministère de l'Intérieur)"
+      )
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      plot.title       = element_text(face = "bold", size = 14),
+      plot.subtitle    = element_text(color = "grey40", size = 10),
+      legend.position  = "bottom",
+      legend.key.width = unit(2, "cm"),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor   = element_blank(),
+      axis.text.y        = element_text(size = 9),
+      plot.background    = element_rect(fill = "white", color = NA),
+      panel.background   = element_rect(fill = "white", color = NA)
+    )
+  
+  ggsave(
+    filename = file.path(OUTPUT, paste0("pression_festive_rn_", annee_complete, ".png")),
+    plot = p, width = 10, height = 8, dpi = 300
+  )
+})
+
+### Cartes biscales IAPC × vote RN----
+
+walk(annees, function(an) {
+  col_rn         <- paste0("pct_rn_", an)
+  election       <- type_election[an]
+  annee_complete <- paste0("20", an)
+  
+  carte  <- carte_base %>% rename(pct_rn_an = all_of(col_rn))
+  seuil_rn <- round((min(carte$pct_rn_an, na.rm = TRUE) + max(carte$pct_rn_an, na.rm = TRUE)) / 2, 1)
+  
+  data_bi1 <- bi_class(carte, x = pct_rn_an, y = IAPC,    style = "equal", dim = 2)
+  data_bi2 <- bi_class(carte, x = pct_rn_an, y = IAPC_v2, style = "equal", dim = 2)
+  
+  map1 <- make_map(data_bi1, coords, "IAPC v1")
+  map2 <- make_map(data_bi2, coords, "IAPC v2")
+  
+  legend1 <- bi_legend(pal = "DkCyan", dim = 2,
+                       xlab = paste0("% vote RN (seuil : ", seuil_rn,    "%)"),
+                       ylab = paste0("IAPC v1 (seuil : ",  seuil_iapc1, ")"),
+                       size = 8)
+  legend2 <- bi_legend(pal = "DkCyan", dim = 2,
+                       xlab = paste0("% vote RN (seuil : ", seuil_rn,    "%)"),
+                       ylab = paste0("IAPC v2 (seuil : ",  seuil_iapc2, ")"),
+                       size = 8)
+  
+  panel1 <- ggdraw() + draw_plot(map1, 0, 0, 1, 1) + draw_plot(legend1, 0.68, 0.03, 0.28, 0.28)
+  panel2 <- ggdraw() + draw_plot(map2, 0, 0, 1, 1) + draw_plot(legend2, 0.68, 0.03, 0.28, 0.28)
+  
+  p_final <- ggdraw() +
+    draw_label(
+      paste0("Indice d'Ancrage Paysager et Culturel (IAPC) et vote RN au premier tour des élections ", election, " ", annee_complete),
+      fontface = "bold", size = 13, y = 0.97, vjust = 1
+    ) +
+    draw_label(
+      paste0("Sources : IAPC (RNA, FFCC)"),
+      size = 8, color = "grey40", y = 0.01, vjust = 0
+    ) +
+    draw_plot(plot_grid(panel1, panel2, ncol = 2), 0, 0.04, 1, 0.92)
+  
+  ggsave(
+    filename = file.path(OUTPUT, paste0("carte_IAPC_v1v2_rn_", annee_complete, ".png")),
+    plot = p_final, width = 18, height = 8, dpi = 300, bg = "white"
+  )
+})
+
+### Nuages de points IAPC × vote RN ----
+
+walk(annees, function(an) {
+  col_rn         <- paste0("pct_rn_", an)
+  election       <- type_election[an]
+  annee_complete <- paste0("20", an)
+  
+  data <- final_analyse %>% rename(pct_rn_an = all_of(col_rn))
+  
+  p1 <- make_scatter(data, x_var = "IAPC",    y_var = "pct_rn_an",
+                     x_label = "IAPC v1", y_label = "% vote RN")
+  p2 <- make_scatter(data, x_var = "IAPC_v2", y_var = "pct_rn_an",
+                     x_label = "IAPC v2", y_label = "% vote RN")
+  
+  p_final <- p1 + p2 +
+    plot_annotation(
+      title = paste0("Lien entre l'Indice d'Ancrage Paysager et Culturel (IAPC) et le vote RN au premier tour des élections ", election, " ", annee_complete),
+      theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+    )
+  
+  ggsave(
+    filename = file.path(OUTPUT, paste0("scatter_IAPC_v1v2_rn_", annee_complete, ".png")),
+    plot = p_final, width = 16, height = 7, dpi = 300, bg = "white"
+  )
+})
+
+### Corrélations IAPC × vote RN----
+
+walk(annees, function(an) {
+  data <- final_analyse %>% rename(pct_rn_an = all_of(paste0("pct_rn_", an)))
+  
+  cat("\n=== ", paste0("20", an), "-", type_election[an], "===\n")
+  cat("-- IAPC v1 --\n") ; print(cor.test(data$IAPC,    data$pct_rn_an))
+  cat("-- IAPC v2 --\n") ; print(cor.test(data$IAPC_v2, data$pct_rn_an))
+})
+
+## IAPC × IARN ----
+### Carte biscale IAPC × IARN ----
+
+data_bi1 <- bi_class(carte_base, x = IARN, y = IAPC,    style = "equal", dim = 2)
+data_bi2 <- bi_class(carte_base, x = IARN, y = IAPC_v2, style = "equal", dim = 2)
+
+map1 <- make_map(data_bi1, coords, "IAPC v1")
+map2 <- make_map(data_bi2, coords, "IAPC v2")
+
+legend1 <- bi_legend(pal = "DkCyan", dim = 2,
+                     xlab = paste0("IARN (seuil : ",    seuil_iarn,  ")"),
+                     ylab = paste0("IAPC v1 (seuil : ", seuil_iapc1, ")"),
+                     size = 8)
+legend2 <- bi_legend(pal = "DkCyan", dim = 2,
+                     xlab = paste0("IARN (seuil : ",    seuil_iarn,  ")"),
+                     ylab = paste0("IAPC v2 (seuil : ", seuil_iapc2, ")"),
+                     size = 8)
+
+panel1 <- ggdraw() + draw_plot(map1, 0, 0, 1, 1) + draw_plot(legend1, 0.68, 0.03, 0.28, 0.28)
+panel2 <- ggdraw() + draw_plot(map2, 0, 0, 1, 1) + draw_plot(legend2, 0.68, 0.03, 0.28, 0.28)
+
+p_carte <- ggdraw() +
+  draw_label(
+    "Indice d'Ancrage Paysager et Culturel (IAPC) et Indice d'Ancrage RN (IARN)",
+    fontface = "bold", size = 13, y = 0.97, vjust = 1
   ) +
-  geom_sf(
-    data = centroides,
-    aes(size = pct_rn_24),
-    shape = 21,
-    fill = "white",      # fond blanc pour contraste
-    color = "black",
-    stroke = 0.8,
-    alpha = 0.75
+  draw_label(
+    "Sources : RNA, FFCC, ministère de l'Intérieur",
+    size = 8, color = "grey40", y = 0.01, vjust = 0
   ) +
-  geom_label_repel(
-    data = coords,
-    aes(x = x, y = y, label = libelle),
-    size = 2.8,
-    fontface = "bold",
-    color = "black",
-    fill = alpha("white", 0.75),
-    label.size = 0.2,
-    label.r = unit(0.15, "lines"),
-    box.padding = 0.4,
-    point.padding = 0.3,
-    segment.color = "grey40",
-    segment.size = 0.4,
-    segment.alpha = 0.8,
-    max.overlaps = Inf,   # force tous les labels
-    min.segment.length = 0
-  ) +
-  scale_fill_viridis_c(
-    option = "magma",
-    direction = -1,
-    name = "IAPC",
-    na.value = "grey80"
-  ) +
-  scale_size_continuous(
-    name = "% vote RN 2024",
-    range = c(2, 12),          # plage élargie pour mieux différencier
-    breaks = c(10, 25, 40, 55),
-    labels = c("10 %", "25 %", "40 %", "55 %")
-  ) +
-  guides(
-    size = guide_legend(
-      override.aes = list(fill = "white", color = "black", stroke = 0.8),
-      title.position = "top"
-    ),
-    fill = guide_colorbar(title.position = "top", barwidth = 1, barheight = 8)
-  ) +
-  labs(
-    title = "IAPC et vote RN au premier tour 2024",
-    subtitle = "Couleur = intensité de la pratique taurine (IAPC) | Taille = % vote RN (législatives 2024)",
-    caption = "Sources : RNA, FFCC, ministère de l'Intérieur"
-  ) +
-  theme_void() +
-  theme(
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(size = 10, color = "grey40"),
-    legend.position = "right",
-    legend.box = "vertical",
-    legend.spacing.y = unit(0.5, "cm")
+  draw_plot(plot_grid(panel1, panel2, ncol = 2), 0, 0.04, 1, 0.92)
+
+ggsave(
+  filename = file.path(OUTPUT, "carte_IAPC_v1v2_IARN.png"),
+  plot = p_carte, width = 18, height = 8, dpi = 300, bg = "white"
+)
+
+### Nuages de points IAPC × IARN ----
+
+p1 <- make_scatter(final_analyse, x_var = "IAPC",    y_var = "IARN",
+                   x_label = "IAPC v1 (intensité de la pratique taurine)",
+                   y_label = "IARN (ancrage RN)")
+p2 <- make_scatter(final_analyse, x_var = "IAPC_v2", y_var = "IARN",
+                   x_label = "IAPC v2 (intensité de la pratique taurine)",
+                   y_label = "IARN (ancrage RN)")
+
+p_scatter <- p1 + p2 +
+  plot_annotation(
+    title   = "Lien entre l'Indice d'Ancrage Paysager et Culturel (IAPC) et l'Indice d'Ancrage RN (IARN)",
+    caption = "Sources : RNA, FFCC, ministère de l'Intérieur",
+    theme   = theme(
+      plot.title   = element_text(face = "bold", size = 13, hjust = 0.5),
+      plot.caption = element_text(size = 8, color = "grey40")
+    )
   )
 
+ggsave(
+  filename = file.path(OUTPUT, "scatter_IAPC_v1v2_IARN.png"),
+  plot = p_scatter, width = 16, height = 7, dpi = 300, bg = "white"
+)
 
+### Corrélations IAPC × IARN ----
 
-## Nuage de points ----
-ggplot(final_IAPC_IARN, aes(x = IAPC, y = pct_rn_24)) +
-  geom_point(
-    shape = 21,
-    fill = "steelblue",
-    color = "white",
-    stroke = 0.6,
-    alpha = 0.75,
-    size = 3
-  ) +
-  geom_smooth(
-    method = "lm",
-    se = TRUE,
-    color = "firebrick",
-    linewidth = 0.8,
-    fill = "firebrick",
-    alpha = 0.1
-  ) +
-  geom_label_repel(
-    aes(label = libelle),
-    size = 2.8,
-    fontface = "bold",
-    color = "black",
-    fill = alpha("white", 0.75),
-    label.size = 0.2,
-    box.padding = 0.4,
-    point.padding = 0.3,
-    segment.color = "grey40",
-    segment.size = 0.4,
-    max.overlaps = Inf,
-    min.segment.length = 0
-  ) +
-  labs(
-    title = "IAPC et vote RN au premier tour 2024",
-    subtitle = "Droite de régression linéaire",
-    x = "IAPC (intensité de la pratique taurine)",
-    y = "% vote RN — législatives 2024",
-    caption = "Sources : RNA, FFCC, ministère de l'Intérieur"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(size = 10, color = "grey40"),
-    panel.grid.minor = element_blank()
-  )
-
-
-
-## Nuage de points ----
-ggplot(final_IAPC_IARN, aes(x = IAPC_v2, y = pct_rn_24)) +
-  geom_point(
-    shape = 21,
-    fill = "steelblue",
-    color = "white",
-    stroke = 0.6,
-    alpha = 0.75,
-    size = 3
-  ) +
-  geom_smooth(
-    method = "lm",
-    se = TRUE,
-    color = "firebrick",
-    linewidth = 0.8,
-    fill = "firebrick",
-    alpha = 0.1
-  ) +
-  geom_label_repel(
-    aes(label = libelle),
-    size = 2.8,
-    fontface = "bold",
-    color = "black",
-    fill = alpha("white", 0.75),
-    label.size = 0.2,
-    box.padding = 0.4,
-    point.padding = 0.3,
-    segment.color = "grey40",
-    segment.size = 0.4,
-    max.overlaps = Inf,
-    min.segment.length = 0
-  ) +
-  labs(
-    title = "IAPC_v2 et vote RN au premier tour 2024",
-    subtitle = "Droite de régression linéaire",
-    x = "IAPC_v2 (intensité de la pratique taurine)",
-    y = "% vote RN — législatives 2024",
-    caption = "Sources : RNA, FFCC, ministère de l'Intérieur"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(size = 10, color = "grey40"),
-    panel.grid.minor = element_blank()
-  )
-
-cor.test(final_IAPC_IARN$IAPC_v2, final_IAPC_IARN$pct_rn_24)
-
-# IAPC → RN 2024
-# 
-# Corrélation = 0.32, p-value = 0.20 → non significative
-# On ne peut pas rejeter l'hypothèse d'absence de corrélation
-# 
-# IAPC_v2 → RN 2024
-# 
-# Corrélation = 0.43, p-value = 0.075 → limite de significativité (proche du seuil 0.05)
-# Tendance positive plus marquée, mais toujours pas significative au seuil classique
-# 
-# Le problème principal : df = 16, soit seulement 18 communes dans ta base. Avec si peu d'observations, la puissance statistique est très faible — une vraie corrélation peut passer inaperçue. L'intervalle de confiance très large (presque -0.18 à +0.68) le confirme.
-# En résumé : il y a une tendance positive entre pratique taurine et vote RN, mais tu ne peux pas la conclure statistiquement avec 18 points. C'est une limite à mentionner dans ton analyse.
+cat("-- IAPC v1 × IARN --\n") ; print(cor.test(final_analyse$IAPC,    final_analyse$IARN))
+cat("-- IAPC v2 × IARN --\n") ; print(cor.test(final_analyse$IAPC_v2, final_analyse$IARN))
