@@ -360,16 +360,12 @@ election_legislative_2024<- election_legislative_2024_raw %>%
     ~ as.numeric(gsub(",", ".", gsub("%", "", .)))
   )) %>%
   group_by(com) %>%
+  # Les % sont calculés sur les exprimés de toute la commune : pour une commune
+  # répartie sur plusieurs circonscriptions (Nîmes), les scores d'une même nuance s'additionnent.
   summarise(
-    pct_rn_24         = mean(`percent_voix_exprimees`[`nuance_candidat` == "RN"], na.rm = TRUE),
-    pct_gauche_24     = {
-      by_nuance <- tapply(
-        percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2024],
-        nuance_candidat[nuance_candidat %in% nuances_gauche_2024],
-        mean, na.rm = TRUE
-      )
-      sum(by_nuance, na.rm = TRUE)
-    },pct_abstention_24 = first(`percent_abstentions`),
+    pct_rn_24         = sum(percent_voix_exprimees[nuance_candidat == "RN"], na.rm = TRUE),
+    pct_gauche_24     = sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2024], na.rm = TRUE),
+    pct_abstention_24 = first(percent_abstentions),
     .groups = "drop"
   )
 
