@@ -3,23 +3,26 @@
 # CONFIG ----
 library(readr)
 library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(forcats)
 library(readxl)
-library(tidyverse)
 library(janitor)
 library(DT)
 library(ggplot2)
 library(sf)
 library(writexl)
-library(sf)
 library(ggrepel)
 library(biscale)
 library(cowplot)
 library(patchwork)
 
 
-DATA_DIR <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data/raw"
-DATA_DIR_processed <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/data/processed"
-OUTPUT <- "C:/Users/lisaw/Documents/TRAVAIL/analyse_camargue/output"
+# Chemins relatifs à la racine du projet (ouvrir analyse_camargue.Rproj)
+DATA_DIR <- "data/raw"
+DATA_DIR_processed <- "data/processed"
+OUTPUT <- "output"
 
 communes_cibles <- c("30059", #Le Cailar
                      "30341", #Vauvert
@@ -138,9 +141,7 @@ precarite_filosofi <- read_delim(
 ) %>% 
   filter(`CODGEO` %in% communes_cibles) %>% 
   select(com =CODGEO,
-         # revenu_median_2020=MED20,
          tx_menage_fiscaux_imposables_2020 = PIMP20,
-         # tx_pauvrete_2020 = TP6020,
          part_prestations_sociales_2020 = PPSOC20,
          decile1_2020 = D120,
          decile9_2020 = D920,
@@ -272,34 +273,14 @@ insee_recensement <- insee_recensement_raw %>% select("com", "libelle",
   tx_locataire_22     = P22_RP_LOC     / P22_RP,
   tx_hlm_loc_22       = P22_RP_LOCHLMV / P22_RP_LOC,
   tx_hlm_22           = P22_RP_LOCHLMV / P22_RP,
-  # tx_motorisation  = P22_RP_VOIT1P  / P22_MEN,
   # Logement — ancienneté d'emménagement
-  # tx_anem_recent_22   = P22_MEN_ANEM0002 / P22_MEN,
-  # tx_anem_2_9ans_22   = (P22_MEN_ANEM0204 +P22_MEN_ANEM0509) / P22_MEN,
   tx_enracinement_22 = (P22_MEN_ANEM1019 + P22_MEN_ANEM2029 + P22_MEN_ANEM30P )/ P22_MEN,
-
-  # Logement — chauffage
-  # tx_chauf_elec_22    = P22_RP_CELEC  / P22_RP,
-  # tx_chauf_gazv_22    = P22_RP_CGAZV  / P22_RP,
-  # tx_chauf_fioul_22   = P22_RP_CFIOUL / P22_RP,
-  # tx_chauf_gazb_22    = P22_RP_CGAZB  / P22_RP,
   
   # SCOLARISATION
-  # tx_scol0205_22      = P22_SCOL0205 / P22_POP0205,
-  # tx_scol0610_22      = P22_SCOL0610 / P22_POP0610,
-  # tx_scol1114_22      = P22_SCOL1114 / P22_POP1114,
-  # tx_scol1517_22      = P22_SCOL1517 / P22_POP1517,
   tx_scol1824_22      = P22_SCOL1824 / P22_POP1824,
   tx_scol2529_22      = P22_SCOL2529 / P22_POP2529,
   
   # DIPLÔMES
-  # tx_dipl_min_22      = P22_NSCOL15P_DIPLMIN / P22_NSCOL15P,
-  # tx_dipl_bepc_22     = P22_NSCOL15P_BEPC    / P22_NSCOL15P,
-  # tx_dipl_capbep_22   = P22_NSCOL15P_CAPBEP  / P22_NSCOL15P,
-  # tx_dipl_bac_22      = P22_NSCOL15P_BAC     / P22_NSCOL15P,
-  # tx_dipl_sup2_22     = P22_NSCOL15P_SUP2    / P22_NSCOL15P,
-  # tx_dipl_sup34_22    = P22_NSCOL15P_SUP34   / P22_NSCOL15P,
-  # tx_dipl_sup5_22     = P22_NSCOL15P_SUP5    / P22_NSCOL15P,
   tx_dipl_sup_tot_22  = (P22_NSCOL15P_SUP2 + P22_NSCOL15P_SUP34 + P22_NSCOL15P_SUP5) / P22_NSCOL15P,
   
   # Emploi & chômage — global
@@ -311,34 +292,17 @@ insee_recensement <- insee_recensement_raw %>% select("com", "libelle",
   tx_etud_1564_22     = P22_ETUD1564   / P22_POP1564,
   
   # Emploi & chômage — par diplôme
-  # tx_chom_diplmin_22  = P22_CHOM_DIPLMIN / P22_ACT_DIPLMIN,
-  # tx_chom_bepc_22     = P22_CHOM_BEPC    / P22_ACT_BEPC,
-  # tx_chom_capbep_22   = P22_CHOM_CAPBEP  / P22_ACT_CAPBEP,
-  # tx_chom_bac_22      = P22_CHOM_BAC     / P22_ACT_BAC,
   tx_chom_bac_max_22 = (P22_CHOM_DIPLMIN + P22_CHOM_BEPC + P22_CHOM_CAPBEP + P22_CHOM_BAC) / (P22_ACT_DIPLMIN + P22_ACT_BEPC + P22_ACT_CAPBEP + P22_ACT_BAC),
-  # tx_chom_sup2_22     = P22_CHOM_SUP2    / P22_ACT_SUP2,
-  # tx_chom_sup34_22    = P22_CHOM_SUP34   / P22_ACT_SUP34,
-  # tx_chom_sup5_22     = P22_CHOM_SUP5    / P22_ACT_SUP5,
   tx_chom_sup_22 = (P22_CHOM_SUP2 + P22_CHOM_SUP34 + P22_CHOM_SUP5) / (P22_ACT_SUP2 + P22_ACT_SUP34 + P22_ACT_SUP5),
   
   # STATUT D'EMPLOI & PRÉCARITÉ
-  # tx_salaries_22      = P22_SAL15P   / P22_ACTOCC15P,
-  # tx_nonsalaries_22   = P22_NSAL15P  / P22_ACTOCC15P,
-  # tx_salaries_tp_22     = P22_SAL15P_TP / P22_SAL15P,
-  # tx_tp_22     = P22_ACTOCC15P_TP   / P22_ACTOCC15P,
   tx_cdi_22 = (P22_HSAL15P_CDI + P22_FSAL15P_CDI) / (P22_SAL15P),
   tx_cdd_22 = (P22_HSAL15P_CDD + P22_FSAL15P_CDD) / (P22_SAL15P),
-  # tx_interim_22 = (P22_HSAL15P_INTERIM + P22_FSAL15P_INTERIM) / (P22_SAL15P),
   tx_indep_22       = (P22_HNSAL15P_INDEP + P22_FNSAL15P_INDEP)  / P22_NSAL15P,
   
   # Mobilité domicile-travail — modes
   tx_mob_voiture_22   = P22_ACTOCC15P_VOITURE  / P22_ACTOCC15P,
-  # tx_mob_commun_22    = P22_ACTOCC15P_COMMUN   / P22_ACTOCC15P,
-  # tx_mob_velo_22      = P22_ACTOCC15P_VELO     / P22_ACTOCC15P,
-  # tx_mob_marche_22    = P22_ACTOCC15P_MARCHE   / P22_ACTOCC15P,
-  # tx_mob_pastrans_22  = P22_ACTOCC15P_PASTRANS  / P22_ACTOCC15P,
-  # tx_mob_douce_22     = (P22_ACTOCC15P_VELO + P22_ACTOCC15P_MARCHE) / P22_ACTOCC15P,
-  
+
   # Mobilité — distance
   tx_travail_mcommune_22  = P22_ACTOCC15P_ILT1 / P22_ACTOCC15P,  # même commune
   tx_trajet_adépartement_22   = P22_ACTOCC15P_ILT3 / P22_ACTOCC15P,  # autre département
@@ -355,9 +319,7 @@ observatoire_territoire <- observatoire_territoire_raw %>%
     com = Code,
     nb_licencies_sportifs_percent_2022          = `Nombre de licenciés sportifs pour 100 habitants 2022`,
     densite_7niveaux                    = `Grille communale de densité en 7 niveaux`,
-    # typo_ruralite                       = `Typologie diversité des ruralités (Commune)`,
     part_immigres_2022                  = `Part des immigrés dans la population 2022`,
-    # part_etrangers_2022                 = `Part des étrangers dans la population 2022`,
     part_emploi_agri_2022               = `Part des emplois dans l'agriculture 2022`,
     part_emploi_industrie_2022          = `Part des emplois dans l'industrie 2022`,
     part_emploi_tertiaire_2022          = `Part des emplois dans le tertiaire 2022`,
@@ -411,7 +373,6 @@ election_legislative_2024<- election_legislative_2024_raw %>%
     .groups = "drop"
   )
 
-
 ### --- Législatives 2017 ----
 election_legislative_2017<- election_legislative_2017_raw %>%
   mutate(across(everything(), as.character)) %>%
@@ -436,7 +397,6 @@ election_legislative_2017<- election_legislative_2017_raw %>%
     .groups = "drop"
   ) %>%
   # Ajout lignes manquantes FN — candidat absent du fichier source
-  # Source : [à préciser]
   add_row(com = "30189", 
           code_de_la_circonscription = "1",
           nuance_candidat = "FN",
@@ -525,19 +485,6 @@ election_municipale_2026<- election_municipale_2026_raw %>%
     pct_abstention_26     = first(percent_abstentions),
     .groups = "drop"
   )
-  # summarise(
-  #   pct_rn_26 = ifelse(
-  #     any(nuance_candidat == "LRN"),
-  #     mean(percent_voix_exprimees[nuance_candidat == "LRN"], na.rm = TRUE),
-  #     NA_real_
-  #   ),    pct_gauche_26 = ifelse(
-  #     any(nuance_candidat %in% nuances_gauche_2026),
-  #     sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2026], na.rm = TRUE),
-  #     NA_real_
-  #   ),
-  #   pct_abstention_26 = first(percent_abstentions),
-  #   .groups = "drop"
-  # )
 
 ### --- Municipales 2020 ----
 election_municipale_2020 <- election_municipale_2020_raw %>%
@@ -569,19 +516,6 @@ election_municipale_2020 <- election_municipale_2020_raw %>%
     pct_abstention_20     = first(percent_abs_ins),
     .groups = "drop"
   )
-  # summarise(
-  #   pct_rn_20 = ifelse(
-  #     any(nuance_candidat == "LRN"),
-  #     mean(percent_voix_exprimees[nuance_candidat == "LRN"], na.rm = TRUE),
-  #     NA_real_
-  #   ),    pct_gauche_20 = ifelse(
-  #     any(nuance_candidat %in% nuances_gauche_2020),
-  #     sum(percent_voix_exprimees[nuance_candidat %in% nuances_gauche_2020], na.rm = TRUE),
-  #     NA_real_
-  #   ),
-  #   pct_abstention_20 = first(percent_abs_ins),
-  #   .groups = "drop"
-  # )
 
 ## ASSOCIATIONS ----
 densite_associative <- associations %>%
@@ -599,12 +533,10 @@ arene <- installation %>%
   group_by(com) %>%
   summarise(
     arene      = as.integer(any(grepl("arene|arène", nom_installation, ignore.case = TRUE))),
-    # boulodrome = as.integer(any(grepl("boul|petanque|pétanque", nom_installation, ignore.case = TRUE))),
     .groups = "drop"
   ) %>%
   mutate(arene = ifelse(com == "30003", 1L, arene))
 # Correctif manuel : l'arène d'Aigues-Mortes (30003) est absente du fichier d'équipements sportifs mais la commune dispose bien d'une arène.
-# Source : [à préciser — site de la commune / vérification terrain]
 
 mots_cles_taurin <- paste0(
   "taurin|bouvine|cocarde|manade|gardian|abrivado|bandido|raseteur|razeteur|biou|bouvino|aficion|ferrade|manadier|tauromachi"
@@ -735,10 +667,6 @@ final_analyse <- final %>%
            list(norm = normalize)),
     dim_niveau = (pct_rn_02_norm + pct_rn_17_norm + 
                     pct_rn_22_norm + pct_rn_24_norm) / 4,
-    
-    # dim_dynamique
-    # across(c(evol_rn_02_22, evol_rn_17_24), list(norm = normalize)),
-    # dim_dynamique = 0.65 * evol_rn_02_22_norm + 0.35 * evol_rn_17_24_norm,
     
     # IARN
     IARN = 0.5 * dim_niveau + 0.5 * dim_constance 
